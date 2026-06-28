@@ -1,0 +1,391 @@
+================================================================================
+PROSPECTPILOT — PROJECT NOTES
+Repository: https://github.com/Shraddha-Bankar/Prospectpilot_project
+Branch analyzed: main (latest commit at analysis time: "Update import paths
+for eslint-config-next modules", 9 commits total, single contributor:
+Shraddha-Bankar)
+Analysis date: 2026-06-28
+Method: Direct inspection of repository file contents via GitHub API/raw
+content. No information below is assumed — anything not verifiable from the
+repository is explicitly marked TODO.
+================================================================================
+
+
+1. WHAT THIS PROJECT ACTUALLY IS
+--------------------------------------------------------------------------------
+ProspectPilot is a single Next.js (App Router) web application — a client-side,
+five-phase, guided workflow tool aimed at helping someone manually run a B2B
+lead-generation + outreach process for local Indian small businesses
+(dentists, salons, clinics, gyms, restaurants, etc.). It is a single
+TypeScript/React codebase with three lightweight server API routes; there is
+no separate backend service, no database, and no authentication layer in the
+repository.
+
+NOTE: The repository's GitHub "description" metadata field currently reads:
+  "Full-stack AI SaaS platform built with React, TypeScript, FastAPI,
+   Supabase, Tailwind CSS, OpenRouter AI, and PostgreSQL featuring CRM, SEO
+   audits, AI business analysis, campaign management, analytics, and
+   reporting."
+This description does NOT match the actual repository contents. There is no
+FastAPI, no Supabase, no PostgreSQL, and no analytics/reporting backend
+anywhere in the codebase inspected. TODO: Update the GitHub repository
+description to accurately reflect the Next.js/TypeScript-only stack
+described in this document, or confirm whether unpushed/separate backend
+code exists elsewhere.
+
+
+2. TECH STACK (from package.json — verified, not assumed)
+--------------------------------------------------------------------------------
+Framework        : Next.js 15.3.3 (App Router)
+Language         : TypeScript ^5
+UI library        : React 19.1.0 / React DOM 19.1.0
+Styling           : Tailwind CSS ^4 (+ @tailwindcss/postcss ^4)
+Component kit     : shadcn/ui ^4.10.0 (style: "base-nova", baseColor: "neutral")
+                     — components.json confirms RSC + TSX mode, icon library lucide
+Animation          : framer-motion ^12.40.0
+Icons              : lucide-react ^1.17.0
+Toasts             : sonner ^2.0.7
+Theming helper     : next-themes ^0.4.6 (imported as a dependency; no explicit
+                     theme-toggle UI was found wired up in the inspected
+                     components — TODO: confirm if/where next-themes is used)
+Maps               : leaflet ^1.9.4, react-leaflet ^5.0.0, @types/leaflet ^1.9.21
+Charts             : recharts ^3.8.1 (dependency present — TODO: no component
+                     in the repo currently imports recharts; confirm intended use)
+Class utilities    : class-variance-authority ^0.7.1, clsx ^2.1.1,
+                     tailwind-merge ^3.6.0, tw-animate-css ^1.4.0
+Misc UI dep        : @base-ui/react ^1.5.0 (dependency present — TODO: no
+                     direct import of @base-ui/react found in inspected files;
+                     confirm intended use, possibly a shadcn/ui transitive need)
+Linting            : eslint ^9, eslint-config-next 15.3.3
+Package manager    : npm (no lockfile committed; .npmrc sets
+                     legacy-peer-deps=true)
+Node engine        : TODO — no "engines" field in package.json; no
+                     .node-version / .nvmrc file in repo
+
+Scripts (package.json):
+  dev    -> next dev
+  build  -> next build
+  start  -> next start
+  lint   -> eslint
+
+
+3. PROJECT STRUCTURE SUMMARY
+--------------------------------------------------------------------------------
+(See structure.txt for the full annotated tree.)
+
+  app/                Next.js App Router pages + API routes
+    page.tsx           "/" — the 5-phase pipeline shell (client component)
+    layout.tsx         Root layout: Inter, Calistoga, JetBrains Mono fonts
+                       (next/font/google), global metadata, <Toaster/>
+    pipeline/page.tsx  "/pipeline" — saved-leads kanban-style board
+    api/ai/route.ts    POST endpoint — OpenRouter LLM proxy
+    api/audit/route.ts POST endpoint — per-lead website/business audit
+    api/scrape/route.ts POST endpoint — lead scraping (Apify or seed data)
+  components/          Phase1Scrape, Phase2Audit, Phase3Rank, Phase4Build,
+                       Phase5Outreach, PhaseShell, Stepper, IncompleteState,
+                       LeadMap, plus components/ui/* (shadcn primitives)
+  lib/                 types.ts, scoring.ts, storage.ts, utils.ts
+  data/leads-seed.json 12 seeded demo leads + 12 matching pre-written audits
+  public/              Default Next.js SVG assets (file/globe/next/vercel/window)
+
+
+4. THE FIVE-PHASE PIPELINE (as implemented in app/page.tsx + components/)
+--------------------------------------------------------------------------------
+The app is a single-page client-side state machine (`phase` state, 1–5) with
+no routing between phases (only "/pipeline" is a separate route). State
+(leads, audits, selectedId) is held in React state in app/page.tsx and passed
+down as props — it is NOT persisted across reloads except for entries
+explicitly saved to the pipeline (localStorage, see lib/storage.ts).
+
+  Phase 1 — Scrape  (components/Phase1Scrape.tsx)
+    - Form inputs: niche (text), city (text), count (number, max 25 noted in UI)
+    - Calls POST /api/scrape
+    - Renders results in a table + a live Leaflet map (components/LeadMap.tsx,
+      dynamically imported with ssr:false)
+    - Leads "stagger in" client-side with an 80ms delay per row for visual effect
+
+  Phase 2 — Audit  (components/Phase2Audit.tsx)
+    - Lets the user select/deselect which scraped leads to audit (checkboxes)
+    - Calls POST /api/audit once per selected lead, sequentially, with a
+      150ms delay between calls (progress bar shown)
+    - Displays: PageSpeed gauge (animated SVG ring), estimated lost revenue/
+      month (₹), top 3 "gaps", and an AI-style "biggest gap" summary sentence
+      (this summary is generated by app/api/audit/route.ts logic, not an LLM
+      call — see section 5)
+
+  Phase 3 — Rank  (components/Phase3Rank.tsx)
+    - Purely derived/computed: re-scores every audited lead via
+      lib/scoring.ts -> scoreLead() and sorts descending by score
+    - Top 3 shown as highlighted cards; full sortable table below
+    - User clicks a row/card to select one lead to carry forward
+
+  Phase 4 — Build  (components/Phase4Build.tsx)
+    - For the selected lead, generates a long, structured website-build
+      prompt as a plain JavaScript template string (buildPrompt() function
+      inside this file) — NOT generated via the /api/ai LLM route.
+    - Platform picker: Lovable, Claude Code, Bolt.new, Codex (just opens
+      each platform's URL in a new tab and copies the prompt to clipboard)
+    - "Live preview" panel renders a self-contained demo HTML page
+      (demoSiteHtml() function, also a template string) inside an <iframe>
+      via srcDoc — this is a static mock-up, not a real generated/deployed
+      website.
+    - "Build site" button only runs a setTimeout() to simulate a build
+      (no real build process is triggered)
+
+  Phase 5 — Outreach  (components/Phase5Outreach.tsx)
+    - For the selected lead, generates a first message + a day-3 follow-up
+      message via the buildOutreach() template-string function in this file
+      — again NOT via the /api/ai LLM route.
+    - Channels: WhatsApp (wa.me deep link), Email (mailto: link), Instagram
+      (opens instagram.com generically — no deep link/prefill, since
+      Instagram has no DM-prefill URL scheme)
+    - Language toggle: English / Hinglish (Hinglish is default = true)
+    - Editable textareas; "Copy" and "Send" buttons
+
+  /pipeline page (app/pipeline/page.tsx)
+    - Reads/writes a separate persisted list of leads via lib/storage.ts
+      (localStorage key: "prospectpilot_pipeline")
+    - Kanban-style columns: New, Contacted, Interested, Proposal Sent,
+      Won, Lost
+    - TODO: No UI in Phase 1–5 was found that actually calls
+      addToPipeline() to push a lead into this saved list — confirm whether
+      this wiring exists elsewhere or is a planned/incomplete feature.
+
+
+5. API ROUTES — DETAILED BEHAVIOR (verified from source)
+--------------------------------------------------------------------------------
+POST /api/scrape   (app/api/scrape/route.ts)
+  Request body : { niche: string, city: string, count: number }
+  Behavior:
+    - If APIFY_TOKEN is not set: reads data/leads-seed.json and returns up to
+      `count` seeded leads. Response: { source: "seed", leads: [...] }
+    - If APIFY_TOKEN is set: calls Apify actor
+      "compass~crawler-google-places" (or APIFY_ACTOR override) via
+      https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items,
+      searching `"{niche} in {city}"`, maps results to the Lead type.
+      Response: { source: "apify", leads: [...] }
+    - On any Apify error: falls back to seed data.
+      Response: { source: "seed-fallback", error, leads: [...] }
+
+POST /api/audit   (app/api/audit/route.ts)
+  Request body : { lead: Lead }
+  Behavior:
+    - First checks data/leads-seed.json's "audits" map by lead.id — if a
+      pre-written audit exists for that exact seed lead, returns it directly.
+      Response: { audit: <AuditResult> }
+    - Otherwise (a non-seed/live lead): if GOOGLE_PAGESPEED_KEY is set, calls
+      Google PageSpeed Insights API v5
+      (https://www.googleapis.com/pagespeedonline/v5/runPagespeed,
+      strategy=mobile, category=PERFORMANCE) for the lead's website.
+    - Builds a `gaps` string array and a heuristic `biggestGap` sentence and
+      an `estLostRevenuePerMonth` figure using simple arithmetic (NOT an LLM
+      call) — e.g. estLostRevenuePerMonth = max(20000,
+      reviewsCount*400 + (hasWebsite ? 0 : 30000))
+
+POST /api/ai   (app/api/ai/route.ts)
+  Request body : { prompt: string, systemPrompt?: string }
+  Behavior:
+    - If OPENROUTER_API_KEY is not set: returns a canned
+      "[Demo Mode] Add your free OPENROUTER_API_KEY..." text response.
+    - If set: calls OpenRouter's chat completions endpoint
+      (https://openrouter.ai/api/v1/chat/completions) using model
+      "meta-llama/llama-3.1-8b-instruct:free", max_tokens 1024, temperature 0.7.
+  IMPORTANT — VERIFIED FINDING: as of this analysis, no component in the
+  repository (Phase1–5, pipeline page, or any other file) calls fetch("/api/ai").
+  A repo-wide search for "/api/ai" found matches only inside the route file
+  itself. This endpoint currently exists in the codebase but is NOT invoked
+  by the UI — all "AI-sounding" content the user sees (build prompts, demo
+  site copy, outreach messages, audit "biggest gap" text) is generated by
+  plain deterministic template-string functions in the frontend/route code,
+  not by a live LLM call. TODO: Either wire Phase 4/5 (or the audit route) to
+  call /api/ai, or update marketing/documentation claims of "AI-powered" to
+  reflect the current template-based implementation, or confirm this is
+  intentional scaffolding for a future iteration.
+
+
+6. SCORING ALGORITHM (lib/scoring.ts — verified, exact logic)
+--------------------------------------------------------------------------------
+scoreLead(lead, audit) computes a 0–100 conversion-potential score as the sum
+of six weighted components (each individually capped):
+
+  noOrBadSite   : 25 if no website at all
+                  20 if has website but pageSpeedScore < 50
+                  10 if pageSpeedScore < 70
+                  0  otherwise
+  reviewVolume  : min(20, round(reviewsCount / 5))
+  rating        : 15 if rating >= 4
+                  8  if rating >= 3.5
+                  0  otherwise
+  recency       : 10 if reviewsCount > 20
+                  5  if reviewsCount > 5
+                  0  otherwise
+  reachable     : +5 if phone present, +5 if whatsapp present, +5 if email present
+                  (max 15)
+  industryFit   : 15 if category matches one of: dentist, salon, clinic, spa,
+                  gym, restaurant, cafe, lawyer, doctor, coaching (case-
+                  insensitive substring match)
+                  8  otherwise
+
+  Total score = sum of the above, capped at 100 (Math.min(100, score)).
+
+This score and its full breakdown (scoreBreakdown object) is attached to each
+lead as a RankedLead and used purely for sorting in Phase 3.
+
+
+7. DATA MODEL (lib/types.ts — verbatim)
+--------------------------------------------------------------------------------
+  Lead: id, name, category, address, city, phone?, whatsapp?, email?,
+        website?, rating?, reviewsCount?, lat, lng, photosCount?,
+        yearsInBusiness?
+  AuditResult: leadId, pageSpeedScore, hasWebsite, mobileFriendly, https,
+        hasSchema, loadTimeMs, gaps (string[]), biggestGap, estLostRevenuePerMonth
+  RankedLead: Lead & { audit: AuditResult, score: number, scoreBreakdown: {...} }
+  ScrapeInput: { niche, city, count }
+  OutreachChannel: "whatsapp" | "email" | "instagram"
+  OutreachLanguage: "english" | "hinglish"
+
+lib/storage.ts (localStorage-backed, client-only — key "prospectpilot_pipeline"):
+  PipelineStage = "new" | "contacted" | "interested" | "proposal_sent" |
+                  "won" | "lost"
+  Functions: getPipeline(), addToPipeline(lead), updatePipelineStage(leadId,
+  stage), removeFromPipeline(leadId)
+
+
+8. SEED / DEMO DATA (data/leads-seed.json)
+--------------------------------------------------------------------------------
+  Top-level keys: "input", "leads", "audits"
+  leads      : array of 12 fully-formed demo Lead objects (e.g. id "lead-01",
+               "Smile Studio Dental Clinic", Bandra/Mumbai-area businesses,
+               with phone/whatsapp/email/rating/reviewsCount/lat/lng/
+               yearsInBusiness populated)
+  audits     : object map keyed by lead id -> matching pre-written
+               AuditResult objects (12 entries, one per seed lead)
+  This dataset lets the entire 5-phase flow be demoed end-to-end with zero
+  API keys configured.
+
+
+9. ENVIRONMENT VARIABLES (.env.local.example — verbatim, all optional)
+--------------------------------------------------------------------------------
+  OPENROUTER_API_KEY=your_openrouter_api_key
+      # Get a free key at https://openrouter.ai. Enables /api/ai's real LLM
+      # call (currently unused by the UI — see section 5).
+  APIFY_TOKEN=your_apify_token
+      # Enables real Google Places scraping via Apify in /api/scrape.
+      # Without it, /api/scrape always serves seed data.
+  APIFY_ACTOR=compass/crawler-google-places
+      # NOTE: the .env.local.example file uses a forward slash
+      # ("compass/crawler-google-places"), but the default fallback hard-
+      # coded in app/api/scrape/route.ts uses a tilde
+      # ("compass~crawler-google-places"). TODO: confirm which actor ID
+      # format is correct for your Apify account/actor and make the two
+      # consistent.
+  GOOGLE_PAGESPEED_KEY=your_google_pagespeed_key
+      # Enables real Google PageSpeed Insights v5 calls in /api/audit.
+      # Without it, real (non-seed) leads get pageSpeedScore = 0.
+
+  None of these are required to run or demo the app — every API route has a
+  graceful fallback to seed/demo behavior when its corresponding key is unset.
+
+
+10. INSTALLATION & LOCAL DEVELOPMENT
+--------------------------------------------------------------------------------
+  Prerequisites: Node.js (TODO: exact required version not pinned in repo;
+  verified working with Node 22.x during deployment testing of this codebase)
+
+  1. Clone the repository:
+       git clone https://github.com/Shraddha-Bankar/Prospectpilot_project.git
+       cd Prospectpilot_project
+  2. Install dependencies (legacy-peer-deps is auto-applied via .npmrc):
+       npm install
+  3. (Optional) Configure environment variables:
+       cp .env.local.example .env.local
+       # then fill in OPENROUTER_API_KEY / APIFY_TOKEN / APIFY_ACTOR /
+       # GOOGLE_PAGESPEED_KEY as desired — all optional, app works without any
+  4. Run the development server:
+       npm run dev
+       # open http://localhost:3000
+  5. Lint:
+       npm run lint
+       # TODO: as of the analyzed commit, `npm run lint` may still error
+       # directly via CLI due to an eslint-config-next/ESLint-9 flat-config
+       # shape mismatch even after the import-path fix already committed
+       # ("Update import paths for eslint-config-next modules"); this does
+       # NOT block `next build` because next.config.js sets
+       # eslint.ignoreDuringBuilds = true.
+
+
+11. BUILD & PRODUCTION
+--------------------------------------------------------------------------------
+  Build : npm run build   (-> next build)
+  Start : npm run start   (-> next start, respects $PORT)
+
+  Recent repo history relevant to buildability (from commit log, most recent
+  first):
+    "Update import paths for eslint-config-next modules"
+    "Configure ESLint to ignore during builds"
+    "Downgrade next package from 15.3.6 to 15.3.3"
+    "Initial clean commit"
+  These three most recent commits collectively fixed a previously confirmed
+  build-breaking issue: eslint-config-next 15.3.3 ships without a
+  package.json "exports" map, so the flat-config imports in
+  eslint.config.mjs (`eslint-config-next/core-web-vitals` /
+  `.../typescript`, no file extension) failed Node's strict ESM resolution
+  during `next build`'s automatic lint step. Both fixes are present in the
+  current eslint.config.mjs and next.config.js.
+
+
+12. DEPLOYMENT
+--------------------------------------------------------------------------------
+  No deployment configuration files (no vercel.json, render.yaml,
+  netlify.toml, Dockerfile, or GitHub Actions workflow) are present in the
+  repository. Deployment platform/process is therefore external to the repo.
+
+  Repository metadata lists a homepage URL: https://prospectpilot-project.vercel.app
+  (TODO: confirm current live/deploy status of this URL — not verified as
+  part of this content-only analysis).
+
+  Known platform-specific consideration (verified from code, not assumed):
+  app/api/scrape/route.ts and app/api/audit/route.ts both read
+  data/leads-seed.json from disk via
+  `fs.readFile(path.join(process.cwd(), "data", "leads-seed.json"))`. On
+  serverless platforms that bundle functions with static file-tracing
+  (e.g. Vercel, Netlify Functions), this dynamically-built path can
+  sometimes be excluded from the deployed function bundle, causing ENOENT
+  errors at runtime even after a successful build. Platforms that run
+  `next start` as a persistent Node.js process with the full repo on disk
+  (e.g. Render, Railway, a VM, or Docker) are not subject to this risk.
+
+  Deployment Root Directory note: because package.json is at the repository
+  root (see structure.txt), any platform's "Root Directory" build setting
+  should be left BLANK / unset for this repo. (This differs from an earlier
+  zip-based snapshot of this project that had package.json nested one level
+  deeper inside an "app/" wrapper folder — that nested layout no longer
+  matches the current GitHub repo.)
+
+  Required Build Command : npm install && npm run build
+  Required Start Command : npm run start
+  TODO: Node version pin for deployment platforms (none committed in repo).
+
+
+13. KNOWN GAPS / INCOMPLETE AREAS (verified by absence in repo, not assumed)
+--------------------------------------------------------------------------------
+  - No automated tests (no test runner configured in package.json, no test
+    files found).
+  - No CI/CD configuration (no .github/workflows directory).
+  - No LICENSE file.
+  - No README.md existed in the repository prior to this analysis.
+  - /api/ai route is implemented but unused by any UI component (see
+    section 5).
+  - "pipeline" saved-leads feature (app/pipeline/page.tsx) has no visible
+    entry point in Phases 1–5 to actually add a lead to it.
+  - recharts and @base-ui/react are declared dependencies with no
+    corresponding component usage found in the inspected files.
+  - GitHub repository description does not match repository contents
+    (see section 1).
+  - APIFY_ACTOR ID format inconsistency between .env.local.example and the
+    hardcoded fallback in code (see section 9).
+
+
+================================================================================
+END OF NOTES
+================================================================================
